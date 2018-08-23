@@ -93,8 +93,8 @@ class PPOTrainer(Trainer):
         if not os.path.exists(self.summary_path):
             os.makedirs(self.summary_path)
 
+        # self.summary_writer = tf.summary.FileWriter(self.summary_path,graph=sess.graph)
         self.summary_writer = tf.summary.FileWriter(self.summary_path)
-
         self.inference_run_list = [self.model.output, self.model.all_probs, self.model.value,
                                    self.model.entropy, self.model.learning_rate]
         if self.is_continuous_action:
@@ -167,6 +167,7 @@ class PPOTrainer(Trainer):
         :return: a tuple containing action, memories, values and an object
         to be passed to add experiences
         """
+
         curr_brain_info = all_brain_info[self.brain_name]
         if len(curr_brain_info.agents) == 0:
             return [], [], [], None
@@ -300,8 +301,8 @@ class PPOTrainer(Trainer):
         """
         curr_info = curr_all_info[self.brain_name]
         next_info = next_all_info[self.brain_name]
-
         for agent_id in curr_info.agents:
+
             self.training_buffer[agent_id].last_brain_info = curr_info
             self.training_buffer[agent_id].last_take_action_outputs = take_action_outputs
 
@@ -310,6 +311,7 @@ class PPOTrainer(Trainer):
         for agent_id in next_info.agents:
             stored_info = self.training_buffer[agent_id].last_brain_info
             stored_take_action_outputs = self.training_buffer[agent_id].last_take_action_outputs
+
             if stored_info is not None:
                 idx = stored_info.agents.index(agent_id)
                 next_idx = next_info.agents.index(agent_id)
@@ -335,6 +337,7 @@ class PPOTrainer(Trainer):
                     a_dist = stored_take_action_outputs[self.model.all_probs]
                     value = stored_take_action_outputs[self.model.value]
                     self.training_buffer[agent_id]['actions'].append(actions[idx])
+
                     self.training_buffer[agent_id]['prev_action'].append(stored_info.previous_vector_actions[idx])
                     self.training_buffer[agent_id]['masks'].append(1.0)
                     if self.use_curiosity:
@@ -366,11 +369,14 @@ class PPOTrainer(Trainer):
         """
 
         info = new_info[self.brain_name]
+
         for l in range(len(info.agents)):
             agent_actions = self.training_buffer[info.agents[l]]['actions']
+
             if ((info.local_done[l] or len(agent_actions) > self.trainer_parameters['time_horizon'])
                     and len(agent_actions) > 0):
                 agent_id = info.agents[l]
+
                 if info.local_done[l] and not info.max_reached[l]:
                     value_next = 0.0
                 else:
@@ -429,6 +435,7 @@ class PPOTrainer(Trainer):
         :return: A boolean corresponding to whether or not update_model() can be run
         """
         size_of_buffer = len(self.training_buffer.update_buffer['actions'])
+
         return size_of_buffer > max(int(self.trainer_parameters['buffer_size'] / self.sequence_length), 1)
 
     def update_model(self):

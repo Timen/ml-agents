@@ -5,7 +5,7 @@ import tensorflow as tf
 import tensorflow.contrib.layers as c_layers
 
 logger = logging.getLogger("unityagents")
-
+slim = tf.contrib.slim
 
 class LearningModel(object):
     def __init__(self, m_size, normalize, use_recurrent, brain):
@@ -25,6 +25,7 @@ class LearningModel(object):
         self.a_size = brain.vector_action_space_size
         self.o_size = brain.vector_observation_space_size * brain.num_stacked_vector_observations
         self.v_size = brain.number_visual_observations
+
 
     @staticmethod
     def create_global_steps():
@@ -125,16 +126,49 @@ class LearningModel(object):
         :return: List of hidden layer tensors.
         """
         with tf.variable_scope(scope):
-            conv1 = tf.layers.conv2d(image_input, 16, kernel_size=[8, 8], strides=[4, 4],
-                                     activation=tf.nn.elu, reuse=reuse, name="conv_1")
-            conv2 = tf.layers.conv2d(conv1, 32, kernel_size=[4, 4], strides=[2, 2],
-                                     activation=tf.nn.elu, reuse=reuse, name="conv_2")
-            hidden = c_layers.flatten(conv2)
+            nbatch = tf.shape(image_input)[0]
+            inlength = int(image_input.get_shape().as_list()[2])
+            sound1 = image_input[:,0, :inlength // 2,0] / 32768.0
+            sound2 = image_input[:,0, inlength // 2:,0] / 32768.0
+            sound1 = tf.reshape(sound1, shape=[-1, 1024, 1])
+            sound2 = tf.reshape(sound2, shape=[-1, 1024, 1])
+            imageIn = tf.concat([sound1, sound2], axis=-1)
+            conv1 = slim.convolution(
+                inputs=imageIn, num_outputs=16,
+                kernel_size=16, stride=8, padding='VALID',
+                biases_initializer=None, scope=scope + '_conv1', normalizer_fn=None)
+            conv2 = slim.convolution(
+                inputs=conv1, num_outputs=32,
+                kernel_size=8, stride=4, padding='VALID',
+                biases_initializer=None, scope=scope + '_conv2', normalizer_fn=None)
+            conv3 = slim.convolution(
+                inputs=conv2, num_outputs=64,
+                kernel_size=4, stride=2, padding='VALID',
+                biases_initializer=None, scope=scope + '_conv3', normalizer_fn=None)
 
-        with tf.variable_scope(scope+'/'+'flat_encoding'):
-            hidden_flat = self.create_continuous_observation_encoder(hidden, h_size, activation,
-                                                                     num_layers, scope, reuse)
-        return hidden_flat
+            conv4 = slim.convolution(
+                inputs=conv3, num_outputs=128,
+                kernel_size=4, stride=2, padding='VALID',
+                biases_initializer=None, scope=scope + '_conv4', normalizer_fn=None)
+            conv5 = slim.convolution(
+                inputs=conv4, num_outputs=h_size,
+                kernel_size=5, stride=2, padding='VALID',
+                biases_initializer=None, scope=scope + '_conv5', normalizer_fn=None)
+            rnn_cell_fast = tf.contrib.rnn.BasicLSTMCell(num_units=h_size, state_is_tuple=True)
+
+            flat_conv = tf.reshape(conv5, [nbatch, -1, h_size])
+            rnn_fast, _ = tf.nn.dynamic_rnn(
+                inputs=flat_conv, cell=rnn_cell_fast, dtype=tf.float32, scope=scope + '_fast_rnn')
+
+            hidden = tf.reshape(rnn_fast[:, -1, :], [nbatch,  h_size],
+                           name="flatten_input")
+
+        #
+        # with tf.variable_scope(scope+'/'+'flat_encoding'):
+        #     hidden_flat = self.create_discrete_observation_encoder(hidden, h_size, activation,
+        #                                                              num_layers, scope, reuse)
+
+        return hidden
 
     @staticmethod
     def create_discrete_observation_encoder(observation_input, s_size, h_size, activation,
@@ -187,7 +221,9 @@ class LearningModel(object):
                                                                             "main_graph_{}_encoder{}"
                                                                             .format(i, j), False)
                     visual_encoders.append(encoded_visual)
+
                 hidden_visual = tf.concat(visual_encoders, axis=1)
+
             if brain.vector_observation_space_size > 0:
                 if brain.vector_observation_space_type == "continuous":
                     hidden_state = self.create_continuous_observation_encoder(vector_observation_input,
@@ -207,6 +243,7 @@ class LearningModel(object):
                 raise Exception("No valid network configuration possible. "
                                 "There are no states or observations in this brain")
             final_hiddens.append(final_hidden)
+
         return final_hiddens
 
     @staticmethod
@@ -245,8 +282,8 @@ class LearningModel(object):
             tf.Variable(self.m_size, name="memory_size", trainable=False, dtype=tf.int32)
             self.prev_action = tf.placeholder(shape=[None], dtype=tf.int32, name='prev_action')
             prev_action_oh = tf.one_hot(self.prev_action, self.a_size)
-            hidden = tf.concat([hidden, prev_action_oh], axis=1)
 
+            hidden = tf.concat([hidden, prev_action_oh], axis=1)
             self.memory_in = tf.placeholder(shape=[None, self.m_size], dtype=tf.float32, name='recurrent_in')
             hidden, memory_out = self.create_recurrent_encoder(hidden, self.memory_in, self.sequence_length)
             self.memory_out = tf.identity(memory_out, name='recurrent_out')

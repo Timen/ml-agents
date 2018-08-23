@@ -8,12 +8,15 @@ import os
 import re
 import tensorflow as tf
 import yaml
+import multiprocessing
+import copy
 
 from tensorflow.python.tools import freeze_graph
 from unitytrainers.ppo.trainer import PPOTrainer
 from unitytrainers.bc.trainer import BehavioralCloningTrainer
 from unityagents import UnityEnvironment, UnityEnvironmentException
-
+import custom_environment.mixer as mixer_env
+from custom_environment.custom_env_wrapper import ShmemVecEnv
 
 class TrainerController(object):
     def __init__(self, env_path, run_id, save_freq, curriculum_file, fast_simulation, load, train,
@@ -36,7 +39,7 @@ class TrainerController(object):
         :param no_graphics: Whether to run the Unity simulator in no-graphics mode
         """
         self.trainer_config_path = trainer_config_path
-        if env_path is not None:
+        if env_path is not None and env_path != "custom":
             env_path = (env_path.strip()
                         .replace('.app', '')
                         .replace('.exe', '')
@@ -78,10 +81,17 @@ class TrainerController(object):
         self.seed = seed
         np.random.seed(self.seed)
         tf.set_random_seed(self.seed)
-        self.env = UnityEnvironment(file_name=env_path, worker_id=self.worker_id,
-                                    curriculum=self.curriculum_file, seed=self.seed,
-                                    docker_training=self.docker_training,
-                                    no_graphics=no_graphics)
+        if env_path == "custom":
+            env_funcs = []
+            for i in range(0,multiprocessing.cpu_count()*2):
+                env_funcs.append(lambda idx: mixer_env.AudioEnv("/home/tijmen/Work/ai-dj/tamborine_120bpm_4-4time_301beats_stereo_cF7PGB.mp3","/home/tijmen/Work/ai-dj/tamborine_127bpm_4-4time_301beats_stereo_HUYeWd.mp3",idx))
+            self.env = ShmemVecEnv(env_funcs)
+
+        else:
+            self.env = UnityEnvironment(file_name=env_path, worker_id=self.worker_id,
+                                        curriculum=self.curriculum_file, seed=self.seed,
+                                        docker_training=self.docker_training,
+                                        no_graphics=no_graphics)
         if env_path is None:
             self.env_name = 'editor_'+self.env.academy_name
         else:
@@ -249,6 +259,7 @@ class TrainerController(object):
                             trainer.end_episode()
                     # Decide and take an action
                     take_action_vector, take_action_memories, take_action_text, take_action_outputs = {}, {}, {}, {}
+
                     for brain_name, trainer in self.trainers.items():
                         (take_action_vector[brain_name],
                          take_action_memories[brain_name],
@@ -256,6 +267,7 @@ class TrainerController(object):
                          take_action_outputs[brain_name]) = trainer.take_action(curr_info)
                     new_info = self.env.step(vector_action=take_action_vector, memory=take_action_memories,
                                              text_action=take_action_text)
+
                     for brain_name, trainer in self.trainers.items():
                         trainer.add_experiences(curr_info, new_info, take_action_outputs[brain_name])
                         trainer.process_experiences(curr_info, new_info)
